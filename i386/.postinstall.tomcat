@@ -18,6 +18,10 @@
 #
 # JBoss Web Server post install script
 #
+
+DEFAULT_LOCATION="/opt/jws-3.0"
+LIB_DIR="lib"
+
 if [ -d /usr/xpg4/bin ]
 then
     PATH=/usr/xpg4/bin:$PATH
@@ -35,10 +39,10 @@ fi
 
 if [ ".`id -nu`" = .root ]
 then
-    SUGID=root
+    SUGID="root"
 else
-    "This script must bust be run as superuser" >&2
-    exit 1
+    SUGID="`id -nu`"
+    echo "WARNING: This script should be run as superuser to create user \`tomcat' and directories in \`/var/'." >&2
 fi
 
 check_java_home="no"
@@ -96,9 +100,9 @@ then
     cd ..
     INSTALL_ROOT="`pwd`"
     cd $c
-    if [ "$INSTALL_ROOT" != "/opt/jws-3.0" ]
+    if [ "$INSTALL_ROOT" != "$DEFAULT_LOCATION" ]
     then
-        echo "WARNING: Using different root directory then \`/opt/jws-3.0'" >&2
+        echo "WARNING: Using different root directory then \`$DEFAULT_LOCATION'" >&2
     fi
 fi
 #
@@ -106,9 +110,9 @@ fi
 #
 if [ -d "$INSTALL_ROOT" ]
 then
-    if [ -f "$INSTALL_ROOT/etc/.postinstall.done" ]
+    if [ -f "$INSTALL_ROOT/etc/.postinstall.tomcat.done" ]
     then
-        "Package \`' already installed in : \`$INSTALL_ROOT'" >&2
+        echo "Skipping post install. Package is already installed in : \`$INSTALL_ROOT'" >&2
         exit 17
     else
     (
@@ -117,168 +121,149 @@ then
     )
     fi
 else
-    "Unknown package base directory : \`$INSTALL_ROOT'" >&2
+    echo "Unknown package base directory : \`$INSTALL_ROOT'" >&2
     exit 20
 fi
 
 if [ ".$LD_LIBRARY_PATH" = . ]
 then
-    LD_LIBRARY_PATH="$INSTALL_ROOT/lib"
+    LD_LIBRARY_PATH="$INSTALL_ROOT/$LIB_DIR"
 else
-    LD_LIBRARY_PATH="$INSTALL_ROOT/lib:$LD_LIBRARY_PATH"
+    LD_LIBRARY_PATH="$INSTALL_ROOT/$LIB_DIR:$LD_LIBRARY_PATH"
 fi
 export LD_LIBRARY_PATH
 
+# Privileged execution
 # Add the "tomcat" user
-if [ ".$tomcat_uid" = . ]; then
-    tomcat_uid=91
-    tomcat_uiv=true
+if [ "$SUGID" == "root" ]
+then
+    if [ ".$tomcat_uid" = . ]; then
+        tomcat_uid=91
+        tomcat_uiv=true
+    else
+        tomcat_uiv=false
+    fi
+    
+    tomcat_osu="`id -u tomcat 2>/dev/null`"
+    tomcat_osg="`id -g tomcat 2>/dev/null`"
+    if [ ".$tomcat_osg" = . ]; then
+        tomcat_osg=$tomcat_uid
+        /usr/sbin/groupadd -g $tomcat_osg tomcat 2> /dev/null || true
+        if [ $? -eq 0 ]; then
+            echo "Tomcat group (id=$tomcat_osg) created."
+        fi
+    elif $tomcat_uiv; then
+        echo "Tomcat group (id=$tomcat_osu) already exists."
+    fi
+    
+    createbasedir "$INSTALL_ROOT/var/tomcat"
+    dirattributes 0775 root tomcat "$INSTALL_ROOT/var/tomcat"
+    
+    if [ ".$tomcat_osu" = . ]; then
+        tomcat_osu=$tomcat_uid
+        /usr/sbin/useradd -c "Apache Tomcat" -u $tomcat_osu -g tomcat \
+            -s /bin/sh -m -d "$INSTALL_ROOT/var/tomcat" tomcat 2> /dev/null || true
+        if [ $? -eq 0 ]; then
+            echo "Tomcat  user (id=$tomcat_osu) created."
+        fi
+    elif $tomcat_uiv; then
+        echo "Tomcat user  (id=$tomcat_osu) already exists."
+    fi
+# Unprivileged execution
 else
-    tomcat_uiv=false
-fi
-
-tomcat_osu="`id -u tomcat 2>/dev/null`"
-tomcat_osg="`id -g tomcat 2>/dev/null`"
-if [ ".$tomcat_osg" = . ]; then
-    tomcat_osg=$tomcat_uid
-    /usr/sbin/groupadd -g $tomcat_osg tomcat 2> /dev/null || true
-    if [ $? -eq 0 ]; then
-        echo "Tomcat group (id=$tomcat_osg) created."
-    fi
-elif $tomcat_uiv; then
-    echo "Tomcat group (id=$tomcat_osu) already exists."
-fi
-
-createbasedir "$INSTALL_ROOT/var/tomcat"
-dirattributes 0775 root tomcat "$INSTALL_ROOT/var/tomcat"
-
-if [ ".$tomcat_osu" = . ]; then
-    tomcat_osu=$tomcat_uid
-    /usr/sbin/useradd -c "Apache Tomcat" -u $tomcat_osu -g tomcat \
-        -s /bin/sh -m -d "$INSTALL_ROOT/var/tomcat" tomcat 2> /dev/null || true
-    if [ $? -eq 0 ]; then
-        echo "Tomcat  user (id=$tomcat_osu) created."
-    fi
-elif $tomcat_uiv; then
-    echo "Tomcat user  (id=$tomcat_osu) already exists."
+    echo "WARNING: Not a superuser. User and group \`tomcat' will not be created. User \`$SUGID' used instead." >&2
+    echo "WARNING: Not a superuser. Directories in \`/var/' will not be created. Using \`$INSTALL_ROOT/var/' instead." >&2
 fi
 
 #
-# Apache Tomcat7 post install script
+# Apache Tomcat7 and Tomcat8 post install script
 #
-if [ ".$JAVA_HOME" = . ]; then
-    check_java_home=yes
-else
-    echo "Adding JAVA_HOME=$JAVA_HOME to the configuration ..."
-    cat << EOS >> "$INSTALL_ROOT/etc/sysconfig/tomcat7"
+TOMCATS="tomcat7 tomcat8"
+for TOMCAT in $TOMCATS
+do
+    if [ ".$JAVA_HOME" = . ]; then
+        check_java_home=yes
+    else
+        echo "Adding JAVA_HOME=$JAVA_HOME to the configuration ..."
+        cat << EOS >> "$INSTALL_ROOT/etc/sysconfig/$TOMCAT"
 
 #
 # Added by postinstall script
 JAVA_HOME="$JAVA_HOME"
 
 EOS
-fi
-
-test ".$INSTALL_ROOT" = "." && INSTALL_ROOT="`cd .. && pwd;`"
-createbasedir /var/log/tomcat7
-for i in temp work
-do
-    createbasedir /var/cache/tomcat7/$i
-    dirattributes 0775 root tomcat /var/cache/tomcat7/$i
-done
-dirattributes 0775 root tomcat /var/cache/tomcat7
-setattributes 0775 root tomcat /var/log/tomcat7
-setattributes 0775 root tomcat $INSTALL_ROOT/share/tomcat7
-dirattributes 0775 root tomcat $INSTALL_ROOT/share/tomcat7/webapps
-dirattributes 0775 root tomcat $INSTALL_ROOT/share/tomcat7/server/webapps
-dirattributes 0775 root tomcat $INSTALL_ROOT/share/tomcat7/conf
-setattributes 0660 root tomcat $INSTALL_ROOT/share/tomcat7/conf/tomcat-users.xml
-if [ -d "$INSTALL_ROOT/share/tomcat7" ]; then
-    cd "$INSTALL_ROOT/share/tomcat7"
-    createsymlink /var/log/tomcat7 logs
-    createsymlink /var/cache/tomcat7/temp temp
-    createsymlink /var/cache/tomcat7/work work
-    cd bin
-    createsymlink ../../java/commons-daemon-1.0.15-redhat-1.jar commons-daemon.jar
-    cd ..
-fi
-
-for i in $INSTALL_ROOT/sbin/tomcat7 \
-         $INSTALL_ROOT/etc/sysconfig/tomcat7 \
-         $INSTALL_ROOT/etc/logrotate.d/tomcat7 \
-         $INSTALL_ROOT/share/tomcat7/bin/catalina.sh
-do
-    if [ -r $i ]
-    then
-      echo "Preserving file: $i"
-    else
-      sed "s;@installroot@;$INSTALL_ROOT;g" $i.in > $i
     fi
-    rm $i.in 2> /dev/null || true
-done
-for i in $INSTALL_ROOT/sbin/tomcat7 \
-         $INSTALL_ROOT/share/tomcat7/bin/catalina.sh
-do
-    chmod 775 $i
-done
+    test ".$INSTALL_ROOT" = "." && INSTALL_ROOT="`cd .. && pwd;`"
 
-#
-# Apache Tomcat8 post install script
-#
-if [ ".$JAVA_HOME" = . ]; then
-    check_java_home=yes
-else
-    echo "Adding JAVA_HOME=$JAVA_HOME to the configuration ..."
-    cat << EOS >> "$INSTALL_ROOT/etc/sysconfig/tomcat8"
-
-#
-# Added by postinstall script
-JAVA_HOME="$JAVA_HOME"
-
-EOS
-fi
-
-test ".$INSTALL_ROOT" = "." && INSTALL_ROOT="`cd .. && pwd;`"
-createbasedir /var/log/tomcat8
-for i in temp work
-do
-    createbasedir /var/cache/tomcat8/$i
-    dirattributes 0775 root tomcat /var/cache/tomcat8/$i
-done
-dirattributes 0775 root tomcat /var/cache/tomcat8
-setattributes 0775 root tomcat /var/log/tomcat8
-setattributes 0775 root tomcat $INSTALL_ROOT/share/tomcat8
-dirattributes 0775 root tomcat $INSTALL_ROOT/share/tomcat8/webapps
-dirattributes 0775 root tomcat $INSTALL_ROOT/share/tomcat8/server/webapps
-dirattributes 0775 root tomcat $INSTALL_ROOT/share/tomcat8/conf
-setattributes 0660 root tomcat $INSTALL_ROOT/share/tomcat8/conf/tomcat-users.xml
-if [ -d "$INSTALL_ROOT/share/tomcat8" ]; then
-    cd "$INSTALL_ROOT/share/tomcat8"
-    createsymlink /var/log/tomcat8 logs
-    createsymlink /var/cache/tomcat8/temp temp
-    createsymlink /var/cache/tomcat8/work work
-    cd bin
-    createsymlink ../../java/commons-daemon-1.0.15-redhat-1.jar commons-daemon.jar
-    cd ..
-fi
-
-for i in $INSTALL_ROOT/sbin/tomcat8 \
-         $INSTALL_ROOT/etc/sysconfig/tomcat8 \
-         $INSTALL_ROOT/etc/logrotate.d/tomcat8 \
-         $INSTALL_ROOT/share/tomcat8/bin/catalina.sh
-do
-    if [ -r $i ]
+    # Privileged execution
+    if [ "$SUGID" == "root" ]
     then
-      echo "Preserving file: $i"
+        createbasedir "/var/log/$TOMCAT"
+        for i in temp work
+        do
+            createbasedir "/var/cache/$TOMCAT/$i"
+            dirattributes 0775 root tomcat "/var/cache/$TOMCAT/$i"
+        done
+        dirattributes 0775 root tomcat "/var/cache/$TOMCAT"
+        setattributes 0775 root tomcat "/var/log/$TOMCAT"
+        setattributes 0775 root tomcat "$INSTALL_ROOT/share/$TOMCAT"
+        dirattributes 0775 root tomcat "$INSTALL_ROOT/share/$TOMCAT/webapps"
+        dirattributes 0775 root tomcat "$INSTALL_ROOT/share/$TOMCAT/server/webapps"
+        dirattributes 0775 root tomcat "$INSTALL_ROOT/share/$TOMCAT/conf"
+        setattributes 0660 root tomcat "$INSTALL_ROOT/share/$TOMCAT/conf/tomcat-users.xml"
+        if [ -d "$INSTALL_ROOT/share/$TOMCAT" ]; then
+            cd "$INSTALL_ROOT/share/$TOMCAT"
+            createsymlink "/var/log/$TOMCAT" logs
+            createsymlink "/var/cache/$TOMCAT/temp" temp
+            createsymlink "/var/cache/$TOMCAT/work" work
+            cd bin
+            createsymlink '../../java/commons-daemon-*.jar' commons-daemon.jar
+            cd ..
+        fi
+    # Unprivileged execution
     else
-      sed "s;@installroot@;$INSTALL_ROOT;g" $i.in > $i
+        createbasedir "$INSTALL_ROOT/var/log/$TOMCAT"
+        for i in temp work
+        do
+            createbasedir "$INSTALL_ROOT/var/cache/$TOMCAT/$i"
+            dirattributes 0775 $SUGID $SUGID "$INSTALL_ROOT/var/cache/$TOMCAT/$i"
+        done
+        dirattributes 0775 $SUGID $SUGID "$INSTALL_ROOT/var/cache/$TOMCAT"
+        setattributes 0775 $SUGID $SUGID "$INSTALL_ROOT/var/log/$TOMCAT"
+        setattributes 0775 $SUGID $SUGID "$INSTALL_ROOT/share/$TOMCAT"
+        dirattributes 0775 $SUGID $SUGID "$INSTALL_ROOT/share/$TOMCAT/webapps"
+        dirattributes 0775 $SUGID $SUGID "$INSTALL_ROOT/share/$TOMCAT/server/webapps"
+        dirattributes 0775 $SUGID $SUGID "$INSTALL_ROOT/share/$TOMCAT/conf"
+        setattributes 0660 $SUGID $SUGID "$INSTALL_ROOT/share/$TOMCAT/conf/tomcat-users.xml"
+        if [ -d "$INSTALL_ROOT/share/$TOMCAT" ]; then
+            cd "$INSTALL_ROOT/share/$TOMCAT"
+            createsymlink "$INSTALL_ROOT/var/log/$TOMCAT" logs
+            createsymlink "$INSTALL_ROOT/var/cache/$TOMCAT/temp" temp
+            createsymlink "$INSTALL_ROOT/var/cache/$TOMCAT/work" work
+            cd bin
+            createsymlink '../../java/commons-daemon-*.jar' commons-daemon.jar
+            cd ..
+        fi
     fi
-    rm $i.in 2> /dev/null || true
-done
-for i in $INSTALL_ROOT/sbin/tomcat8 \
-         $INSTALL_ROOT/share/tomcat8/bin/catalina.sh
-do
-    chmod 775 $i
+
+    for i in "$INSTALL_ROOT/sbin/$TOMCAT" \
+             "$INSTALL_ROOT/etc/sysconfig/$TOMCAT" \
+             "$INSTALL_ROOT/etc/logrotate.d/$TOMCAT" \
+             "$INSTALL_ROOT/share/$TOMCAT/bin/catalina.sh"
+    do
+        if [ -r "$i" ]
+        then
+          echo "Preserving file: $i"
+        else
+          sed "s;@installroot@;$INSTALL_ROOT;g" "$i.in" > "$i"
+        fi
+        rm "$i.in" 2> /dev/null || true
+    done
+    for i in "$INSTALL_ROOT/sbin/$TOMCAT" \
+             "$INSTALL_ROOT/share/$TOMCAT/bin/catalina.sh"
+    do
+        chmod 775 "$i"
+    done
 done
 
 #
@@ -286,7 +271,12 @@ done
 #
 if [ -x /usr/bin/crle ]
 then
-    /usr/bin/crle -u -l $INSTALL_ROOT/lib
+    if [ ".$LIB_DIR" = ".lib64" ]
+    then
+        /usr/bin/crle -u -64 -l "$INSTALL_ROOT/$LIB_DIR"
+    else
+        /usr/bin/crle -u -l "$INSTALL_ROOT/$LIB_DIR"
+    fi
 fi
 
 if [ "$check_java_home" = "yes" ]
@@ -294,7 +284,6 @@ then
     if [ ".$JAVA_HOME" = . ]
     then
         echo ""
-
         echo "-----------------------------------------------------------------------"
         echo " NOTICE"
         echo "-----------------------------------------------------------------------"
@@ -307,5 +296,5 @@ then
     fi
 fi
 
-# End of JBoss Web Server post install script
-
+touch "$INSTALL_ROOT/etc/.postinstall.tomcat.done"
+echo "Done
