@@ -135,7 +135,7 @@ export LD_LIBRARY_PATH
 
 # Privileged execution
 # Add the "tomcat" user
-if [ "$SUGID" == "root" ]
+if [ ".$SUGID" = ".root" ]
 then
     if [ ".$tomcat_uid" = . ]; then
         tomcat_uid=91
@@ -196,7 +196,7 @@ EOS
     test ".$INSTALL_ROOT" = "." && INSTALL_ROOT="`cd .. && pwd;`"
 
     # Privileged execution
-    if [ "$SUGID" == "root" ]
+    if [ ".$SUGID" = ".root" ]
     then
         createbasedir "/var/log/$TOMCAT"
         for i in temp work
@@ -244,6 +244,10 @@ EOS
             createsymlink '../../java/commons-daemon-*.jar' commons-daemon.jar
             cd ..
         fi
+
+        # Unprivileged execution, set current user as TOMCAT_USER
+        echo "WARNING: Not a superuser. User \`$SUGID' used as TOMCAT_USER in $INSTALL_ROOT/etc/sysconfig/$TOMCAT." >&2
+        echo "TOMCAT_USER=$SUGID" >> "$INSTALL_ROOT/etc/sysconfig/$TOMCAT"
     fi
 
     for i in "$INSTALL_ROOT/sbin/$TOMCAT" \
@@ -269,14 +273,20 @@ done
 #
 # Configure Solaris runtime linker environment
 #
-if [ -x /usr/bin/crle ]
+# Privileged execution
+if [ ".$SUGID" = ".root" ]
 then
-    if [ ".$LIB_DIR" = ".lib64" ]
+    if [ -x /usr/bin/crle ]
     then
-        /usr/bin/crle -u -64 -l "$INSTALL_ROOT/$LIB_DIR"
-    else
-        /usr/bin/crle -u -l "$INSTALL_ROOT/$LIB_DIR"
+        if [ ".$LIB_DIR" = ".lib64" ]
+        then
+            /usr/bin/crle -u -64 -l "$INSTALL_ROOT/$LIB_DIR"
+        else
+            /usr/bin/crle -u -l "$INSTALL_ROOT/$LIB_DIR"
+        fi
     fi
+else
+    echo "WARNING: Not a superuser. Solaris runtime linker environment \`crle' was not updated." >&2
 fi
 
 if [ "$check_java_home" = "yes" ]
@@ -297,4 +307,4 @@ then
 fi
 
 touch "$INSTALL_ROOT/etc/.postinstall.tomcat.done"
-echo "Done
+echo "Done"
